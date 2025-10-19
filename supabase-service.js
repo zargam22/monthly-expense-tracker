@@ -179,13 +179,25 @@ class SupabaseService {
       const dbUpdates = { ...updates };
       dbUpdates.updated_at = new Date().toISOString();
 
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from(TABLES.TRANSACTIONS)
         .update(dbUpdates)
         .eq('id', transactionId)
-        .eq('user_id', this.userId);
+        .eq('user_id', this.userId)
+        .select()
+        .single();
 
       if (error) throw error;
+
+      // Return in expected format
+      return {
+        id: data.id,
+        amount: data.amount,
+        description: data.description,
+        category: data.category,
+        allocation: data.allocation,
+        date: data.date
+      };
     } catch (error) {
       console.error('Error updating transaction:', error);
       throw error;
