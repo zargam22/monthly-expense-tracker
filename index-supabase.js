@@ -130,6 +130,147 @@ const CATEGORY_COLORS = {
 
 const PIE_CHART_COLORS = ['#28A745', '#007BFF', '#FD7E14', '#DC3545', '#FFC107', '#6F42C1'];
 
+// --- CHART MODAL FUNCTIONALITY ---
+let chartModalCache = null;
+
+function openChartModal(chartType) {
+    const computed = getComputedData();
+    
+    if (!chartModalCache) {
+        chartModalCache = createChartModalElement();
+    }
+    
+    // Update modal content based on chart type
+    const modalContent = chartModalCache.querySelector('.chart-modal-content');
+    const modalTitle = chartModalCache.querySelector('.chart-modal-title');
+    const modalDescription = chartModalCache.querySelector('.chart-modal-description');
+    const chartContainer = chartModalCache.querySelector('.chart-modal-chart');
+    
+    if (chartType === 'pie-chart') {
+        modalTitle.textContent = 'Category-wise Spending';
+        modalDescription.textContent = 'Detailed view of expense distribution across categories';
+        chartContainer.innerHTML = renderPieChart(computed.categorySpending, computed.totalSpent, false);
+    } else if (chartType === 'trends-chart') {
+        modalTitle.textContent = 'Monthly Trends';
+        modalDescription.textContent = 'Detailed comparison of spending patterns across months';
+        chartContainer.innerHTML = renderMonthlyTrendsChart(computed.monthlyTrends, false);
+    }
+    
+    // Show modal with smooth animation
+    document.body.appendChild(chartModalCache);
+    requestAnimationFrame(() => {
+        chartModalCache.style.opacity = '1';
+        chartModalCache.querySelector('.chart-modal').style.transform = 'translate(-50%, -50%) scale(1)';
+    });
+}
+
+function createChartModalElement() {
+    const modal = document.createElement('div');
+    modal.className = 'chart-modal-overlay';
+    modal.style.opacity = '0';
+    modal.style.transition = 'opacity 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94)';
+    
+    modal.innerHTML = `
+        <div class="chart-modal" style="transform: translate(-50%, -50%) scale(0.95); transition: transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);">
+            <div class="chart-modal-header">
+                <div>
+                    <h2 class="chart-modal-title">Chart Title</h2>
+                    <p class="chart-modal-description">Chart description</p>
+                </div>
+                <button class="chart-modal-close" aria-label="Close chart">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="chart-modal-content">
+                <div class="chart-modal-chart">
+                    <!-- Chart content will be inserted here -->
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Setup event listeners
+    setupChartModalListeners(modal);
+    
+    return modal;
+}
+
+function setupChartModalListeners(modal) {
+    const closeModal = () => {
+        modal.style.opacity = '0';
+        modal.querySelector('.chart-modal').style.transform = 'translate(-50%, -50%) scale(0.95)';
+        setTimeout(() => {
+            if (modal.parentNode) {
+                modal.parentNode.removeChild(modal);
+            }
+        }, 300);
+    };
+    
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            closeModal();
+        } else if (e.target.closest('.chart-modal-close')) {
+            closeModal();
+        }
+    });
+    
+    // ESC key support
+    const handleKeydown = (e) => {
+        if (e.key === 'Escape') {
+            closeModal();
+            document.removeEventListener('keydown', handleKeydown);
+        }
+    };
+    document.addEventListener('keydown', handleKeydown);
+}
+
+// Make openChartModal globally available
+window.openChartModal = openChartModal;
+
+// --- CHARTS TOGGLE FUNCTIONALITY ---
+function toggleChartsDropdown() {
+    const dropdown = document.getElementById('charts-dropdown');
+    const toggleBtn = document.querySelector('.charts-toggle-btn');
+    const arrow = document.querySelector('.charts-toggle-arrow');
+    
+    if (dropdown.style.display === 'none' || dropdown.style.display === '') {
+        // Show dropdown
+        dropdown.style.display = 'block';
+        dropdown.style.opacity = '0';
+        dropdown.style.maxHeight = '0';
+        dropdown.style.overflow = 'hidden';
+        dropdown.style.transition = 'all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94)';
+        
+        // Trigger animation
+        requestAnimationFrame(() => {
+            dropdown.style.opacity = '1';
+            dropdown.style.maxHeight = '600px';
+        });
+        
+        // Update button state
+        toggleBtn.setAttribute('aria-expanded', 'true');
+        arrow.style.transform = 'rotate(180deg)';
+    } else {
+        // Hide dropdown
+        dropdown.style.opacity = '0';
+        dropdown.style.maxHeight = '0';
+        
+        setTimeout(() => {
+            dropdown.style.display = 'none';
+        }, 300);
+        
+        // Update button state
+        toggleBtn.setAttribute('aria-expanded', 'false');
+        arrow.style.transform = 'rotate(0deg)';
+    }
+}
+
+// Make toggleChartsDropdown globally available
+window.toggleChartsDropdown = toggleChartsDropdown;
+
 // --- EVENT HANDLERS ---
 async function handleViewToggle(view) {
   state.currentAllocationView = view;
@@ -325,12 +466,34 @@ async function handleAddTransaction() {
   showTransactionModal();
 }
 
+// Make handleAddTransaction globally available for inline onclick handlers
+window.handleAddTransaction = handleAddTransaction;
+
 // Performance optimization: Cache DOM elements and reuse modals
 let transactionModalCache = null;
 
 function showTransactionModal(editTransaction = null) {
   const isEdit = !!editTransaction;
-  const currentDate = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+  
+  // Fix: Use current viewing month context instead of always today's date
+  let currentDate;
+  if (isEdit) {
+    // For editing, use the transaction's original date
+    currentDate = new Date(editTransaction.date).toISOString().split('T')[0];
+  } else {
+    // For new transactions, use today's date if it's in the viewing month, otherwise first day of viewing month
+    const today = new Date();
+    const viewingDate = new Date(state.currentDate);
+    
+    if (today.getFullYear() === viewingDate.getFullYear() && 
+        today.getMonth() === viewingDate.getMonth()) {
+      // Today is in the viewing month, use today
+      currentDate = today.toISOString().split('T')[0];
+    } else {
+      // Today is not in the viewing month, use first day of viewing month
+      currentDate = new Date(viewingDate.getFullYear(), viewingDate.getMonth(), 1).toISOString().split('T')[0];
+    }
+  }
   
   // Create modal only once and reuse
   if (!transactionModalCache) {
@@ -463,9 +626,18 @@ function updateTransactionModalContent(modal, isEdit, editTransaction, currentDa
   const dateHint = modal.querySelector('#date-hint');
   
   // Clear and update form values
-  descInput.value = isEdit ? editTransaction.description : '';
-  amountInput.value = isEdit ? editTransaction.amount : '';
-  dateInput.value = isEdit ? new Date(editTransaction.date).toISOString().split('T')[0] : currentDate;
+  if (!isEdit) {
+    // Reset form for new transactions
+    modal.querySelector('#transaction-form').reset();
+    descInput.value = '';
+    amountInput.value = '';
+    dateInput.value = currentDate;
+  } else {
+    // Update form for editing
+    descInput.value = editTransaction.description;
+    amountInput.value = editTransaction.amount;
+    dateInput.value = new Date(editTransaction.date).toISOString().split('T')[0];
+  }
   
   // Update date label and hint for edit mode
   if (isEdit) {
@@ -487,8 +659,9 @@ function updateTransactionModalContent(modal, isEdit, editTransaction, currentDa
     `).join('')}
   `;
   
-  // Update submit button
-  submitBtn.textContent = 'Save Changes';
+  // Update submit button and ensure it's enabled
+  submitBtn.textContent = isEdit ? 'Save Changes' : 'Add Transaction';
+  submitBtn.disabled = false;
   
   // Update category hint
   modal.querySelector('#category-hint').textContent = `💡 ${state.categories.length} categories available. Manage them in settings.`;
@@ -509,24 +682,37 @@ function setupTransactionModalListeners(isEdit, editTransaction) {
     }, 200);
   }
   
-  // Remove existing event listeners to prevent memory leaks
+  // Clean up existing listeners by cloning and replacing only the buttons
+  // This preserves form functionality while removing old click listeners
   const newCloseBtn = closeBtn.cloneNode(true);
   const newCancelBtn = cancelBtn.cloneNode(true);
   closeBtn.parentNode.replaceChild(newCloseBtn, closeBtn);
   cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
   
-  // Add event listeners to new elements
+  // Add event listeners to new button elements
   newCloseBtn.addEventListener('click', closeModal);
   newCancelBtn.addEventListener('click', closeModal);
   
-  // Optimized overlay click handler
+  // Handle overlay clicks to close modal
+  if (overlay.handleOverlayClick) {
+    overlay.removeEventListener('click', overlay.handleOverlayClick);
+  }
   const handleOverlayClick = (e) => {
     if (e.target === overlay) closeModal();
   };
+  overlay.handleOverlayClick = handleOverlayClick;
   overlay.addEventListener('click', handleOverlayClick);
   
-  // Form submission
-  form.addEventListener('submit', async (e) => {
+  // Form submission - preserve form but remove existing submit listeners
+  if (form.handleSubmit) {
+    form.removeEventListener('submit', form.handleSubmit);
+  }
+  
+  // Ensure submit button is always enabled when setting up listeners
+  const submitBtn = form.querySelector('button[type="submit"]');
+  submitBtn.disabled = false;
+  
+  const handleSubmit = async (e) => {
     e.preventDefault();
     
     const submitBtn = form.querySelector('button[type="submit"]');
@@ -623,10 +809,15 @@ function setupTransactionModalListeners(isEdit, editTransaction) {
     }
     
     function resetSubmitButton() {
-      submitBtn.disabled = false;
-      submitBtn.innerHTML = originalBtnText;
+      const currentSubmitBtn = form.querySelector('button[type="submit"]');
+      currentSubmitBtn.disabled = false;
+      currentSubmitBtn.innerHTML = originalBtnText;
     }
-  });
+  };
+  
+  // Store reference for removal and add event listener
+  form.handleSubmit = handleSubmit;
+  form.addEventListener('submit', handleSubmit);
 }
 
 async function handleDeleteTransaction(transactionId) {
@@ -1162,18 +1353,54 @@ function renderDashboard() {
     <div class="dashboard">
         ${renderSummaryCards(computed)}
         ${renderAllocationOverview(computed)}
-        <div class="card chart-card">
-            <h3>Category-wise Spending</h3>
-            <p>Distribution of expenses</p>
-            ${renderPieChart(computed.categorySpending, computed.totalSpent)}
+        ${renderChartsToggle(computed)}
+        <div class="dashboard-grid">
+            ${renderTransactionsList(computed)}
+            ${renderCategoryBreakdown(computed)}
         </div>
-        <div class="card chart-card">
-            <h3>Monthly Trends</h3>
-            <p>Comparison across months</p>
-            ${renderMonthlyTrendsChart(computed.monthlyTrends)}
+    </div>
+    `;
+}
+
+function renderChartsToggle(computed) {
+    return `
+    <div class="charts-toggle-section">
+        <div class="card charts-toggle-card">
+            <button class="charts-toggle-btn" onclick="toggleChartsDropdown()" aria-expanded="false">
+                <div class="charts-toggle-content">
+                    <div>
+                        <h3>Charts & Analytics</h3>
+                        <p>View spending charts and trends</p>
+                    </div>
+                    <svg class="charts-toggle-arrow" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="6,9 12,15 18,9"></polyline>
+                    </svg>
+                </div>
+            </button>
+            <div class="charts-dropdown-content" id="charts-dropdown" style="display: none;">
+                <div class="charts-grid">
+                    <div class="chart-section">
+                        <div class="chart-header">
+                            <h4>Category-wise Spending</h4>
+                            <p>Distribution of expenses</p>
+                        </div>
+                        <div class="chart-container">
+                            ${renderPieChart(computed.categorySpending, computed.totalSpent, false)}
+                        </div>
+                    </div>
+                    
+                    <div class="chart-section">
+                        <div class="chart-header">
+                            <h4>Monthly Trends</h4>
+                            <p>Comparison across months</p>
+                        </div>
+                        <div class="chart-container">
+                            ${renderMonthlyTrendsChart(computed.monthlyTrends, false)}
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
-        ${renderTransactionsList(computed)}
-        ${renderCategoryBreakdown(computed)}
     </div>
     `;
 }
@@ -1386,13 +1613,13 @@ function renderCategoryBreakdown(computed) {
 }
 
 // --- CHART RENDERING FUNCTIONS ---
-function renderPieChart(categorySpending, totalSpent) {
+function renderPieChart(categorySpending, totalSpent, isPreview = false) {
     if (totalSpent === 0) {
         return `<div class="empty-state">No spending data for this period.</div>`;
     }
     const sortedCategories = Object.entries(categorySpending).sort((a, b) => b[1] - a[1]);
-    const SVG_SIZE = 350;
-    const RADIUS = 85;
+    const SVG_SIZE = isPreview ? 200 : 450;
+    const RADIUS = isPreview ? 60 : 120;
     const center = SVG_SIZE / 2;
     let startAngle = -90;
 
@@ -1409,32 +1636,64 @@ function renderPieChart(categorySpending, totalSpent) {
 
         const pathData = `M ${center},${center} L ${x1},${y1} A ${RADIUS},${RADIUS} 0 ${largeArcFlag},1 ${x2},${y2} Z`;
         
-        const labelAngle = startAngle + angle / 2;
-        const labelRadius = RADIUS + 40;
-        const labelX = center + labelRadius * Math.cos(Math.PI * labelAngle / 180);
-        const labelY = center + labelRadius * Math.sin(Math.PI * labelAngle / 180);
-        const textAnchor = labelX < center ? "end" : "start";
+        // Only show labels in full-size mode
+        const labels = isPreview ? '' : (() => {
+            const labelAngle = startAngle + angle / 2;
+            const labelRadius = RADIUS + 40;
+            const labelX = center + labelRadius * Math.cos(Math.PI * labelAngle / 180);
+            const labelY = center + labelRadius * Math.sin(Math.PI * labelAngle / 180);
+            const textAnchor = labelX < center ? "end" : "start";
 
-        const lineStartX = center + (RADIUS + 5) * Math.cos(Math.PI * labelAngle / 180);
-        const lineStartY = center + (RADIUS + 5) * Math.sin(Math.PI * labelAngle / 180);
+            const lineStartX = center + (RADIUS + 5) * Math.cos(Math.PI * labelAngle / 180);
+            const lineStartY = center + (RADIUS + 5) * Math.sin(Math.PI * labelAngle / 180);
+            
+            return `
+                <polyline points="${lineStartX},${lineStartY} ${labelX},${labelY}" fill="none" stroke="${PIE_CHART_COLORS[index % PIE_CHART_COLORS.length]}" stroke-width="1.5"/>
+                <text class="pie-label-name" x="${labelX + (textAnchor === 'start' ? 5 : -5)}" y="${labelY}" dy="-0.2em" text-anchor="${textAnchor}" fill="${PIE_CHART_COLORS[index % PIE_CHART_COLORS.length]}">${name}</text>
+                <text class="pie-label-percent" x="${labelX + (textAnchor === 'start' ? 5 : -5)}" y="${labelY}" dy="1em" text-anchor="${textAnchor}" fill="${PIE_CHART_COLORS[index % PIE_CHART_COLORS.length]}">${(percent * 100).toFixed(0)}%</text>
+            `;
+        })();
         
         const color = PIE_CHART_COLORS[index % PIE_CHART_COLORS.length];
         startAngle = endAngle;
 
         return `
-            <path d="${pathData}" fill="${color}" stroke="#fff" stroke-width="2"/>
-            <polyline points="${lineStartX},${lineStartY} ${labelX},${labelY}" fill="none" stroke="${color}" stroke-width="1.5"/>
-            <text class="pie-label-name" x="${labelX + (textAnchor === 'start' ? 5 : -5)}" y="${labelY}" dy="-0.2em" text-anchor="${textAnchor}" fill="${color}">${name}</text>
-            <text class="pie-label-percent" x="${labelX + (textAnchor === 'start' ? 5 : -5)}" y="${labelY}" dy="1em" text-anchor="${textAnchor}" fill="${color}">${(percent * 100).toFixed(0)}%</text>
+            <path d="${pathData}" fill="${color}" stroke="#fff" stroke-width="2" title="${name}: ${formatCurrency(amount)} (${(percent * 100).toFixed(1)}%)"/>
+            ${labels}
         `;
     }).join('');
 
-    return `<div class="pie-chart-container"><svg viewBox="0 0 ${SVG_SIZE} ${SVG_SIZE}">${slices}</svg></div>`;
+    const containerClass = isPreview ? 'pie-chart-container preview' : 'pie-chart-container full';
+    const legend = isPreview ? renderChartLegend(sortedCategories, totalSpent) : '';
+    
+    return `
+        <div class="${containerClass}">
+            <svg viewBox="0 0 ${SVG_SIZE} ${SVG_SIZE}">${slices}</svg>
+            ${legend}
+        </div>
+    `;
 }
 
-function renderMonthlyTrendsChart(monthlyTrends) {
+function renderChartLegend(sortedCategories, totalSpent) {
+    const legendItems = sortedCategories.map(([name, amount], index) => {
+        const percent = ((amount / totalSpent) * 100).toFixed(1);
+        const color = PIE_CHART_COLORS[index % PIE_CHART_COLORS.length];
+        return `
+            <div class="legend-item">
+                <span class="legend-color" style="background-color: ${color}"></span>
+                <span class="legend-text">${name}</span>
+                <span class="legend-value">${percent}%</span>
+            </div>
+        `;
+    }).join('');
+    
+    return `<div class="chart-legend">${legendItems}</div>`;
+}
+
+function renderMonthlyTrendsChart(monthlyTrends, isPreview = false) {
     const maxAmount = Math.max(...monthlyTrends.map(d => d.spent + d.remaining), state.salary * 0.5, 1);
     const yAxisLabels = [0, 0.25, 0.5, 0.75, 1].map(p => Math.round(maxAmount * p)).reverse();
+    const chartHeight = isPreview ? 120 : 300;
     
     const bars = monthlyTrends.map(data => {
         const spentHeight = maxAmount > 0 ? (data.spent / maxAmount) * 100 : 0;
@@ -1445,17 +1704,19 @@ function renderMonthlyTrendsChart(monthlyTrends) {
                     <div class="bar remaining" style="height: ${remainingHeight}%" title="Remaining: ${formatCurrency(data.remaining)}"></div>
                     <div class="bar spent" style="height: ${spentHeight}%" title="Spent: ${formatCurrency(data.spent)}"></div>
                 </div>
-                <div class="chart-label">${data.month}</div>
+                <div class="chart-label ${isPreview ? 'compact' : ''}">${data.month}</div>
             </div>
         `;
     }).join('');
 
+    const containerClass = isPreview ? 'bar-chart-container preview' : 'bar-chart-container full';
+    
     return `
-        <div class="bar-chart-container">
-            <div class="y-axis">
+        <div class="${containerClass}">
+            ${!isPreview ? `<div class="y-axis">
                 ${yAxisLabels.map(label => `<span>${formatCurrency(label).replace(CURRENCY, '').trim()}</span>`).join('')}
-            </div>
-            <div class="bar-chart">
+            </div>` : ''}
+            <div class="bar-chart" style="height: ${chartHeight}px">
                 ${bars}
             </div>
             <div class="chart-legend">
