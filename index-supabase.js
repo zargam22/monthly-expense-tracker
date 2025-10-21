@@ -350,6 +350,9 @@ function showTransactionModal(editTransaction = null) {
   setupTransactionModalListeners(isEdit, editTransaction);
 }
 
+// Make showTransactionModal available globally for inline onclick handlers
+window.showTransactionModal = showTransactionModal;
+
 function createTransactionModalElement() {
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
@@ -436,7 +439,7 @@ function createTransactionModalElement() {
             Cancel
           </button>
           <button type="submit" class="btn btn-primary" id="submit-transaction">
-            Add Transaction
+            Save Changes
           </button>
         </div>
       </form>
@@ -485,7 +488,7 @@ function updateTransactionModalContent(modal, isEdit, editTransaction, currentDa
   `;
   
   // Update submit button
-  submitBtn.textContent = isEdit ? 'Update Transaction' : 'Add Transaction';
+  submitBtn.textContent = 'Save Changes';
   
   // Update category hint
   modal.querySelector('#category-hint').textContent = `💡 ${state.categories.length} categories available. Manage them in settings.`;
@@ -638,32 +641,29 @@ async function handleDeleteTransaction(transactionId) {
   if (!confirm('Are you sure you want to delete this transaction?')) return;
 
   try {
-    // Find the transaction to ensure it exists
-    const transaction = state.transactions.find(t => t.id === transactionId);
-    if (!transaction) {
-      console.error('Transaction not found in state:', transactionId);
-      console.log('Available transaction IDs:', state.transactions.map(t => t.id));
-      alert('Transaction not found in local state');
-      return;
-    }
-
-    console.log('Found transaction to delete:', transaction);
-
-    // First update the UI immediately for better UX (optimistic update)
-    state.transactions = state.transactions.filter(t => t.id !== transactionId);
-    render();
-
-    // Then call the backend to actually delete
+    // Try to delete from database first (more robust approach)
     await supabaseService.deleteTransaction(transactionId);
     console.log('Transaction successfully deleted from database');
 
-  } catch (error) {
-    console.error('Error deleting transaction:', error);
-    // Revert the optimistic update on error
+    // Reload transactions from database to ensure consistency
     const allTransactions = await supabaseService.getTransactions();
     state.transactions = allTransactions;
     render();
-    alert('Failed to delete transaction. Please try again.');
+    
+    showNotification('Transaction deleted successfully!', 'success');
+
+  } catch (error) {
+    console.error('Error deleting transaction:', error);
+    if (error.message.includes('No rows')) {
+      // Transaction doesn't exist in database
+      showNotification('Transaction was not found or already deleted.', 'error');
+      // Reload to sync state
+      const allTransactions = await supabaseService.getTransactions();
+      state.transactions = allTransactions;
+      render();
+    } else {
+      showNotification('Failed to delete transaction. Please try again.', 'error');
+    }
   }
 }
 
@@ -773,15 +773,11 @@ function createCategoriesModalElement() {
                 <div class="field-hint">💡 33% for necessities, 67% for discretionary spending</div>
               </div>
             </div>
-            <button type="submit" class="btn btn-primary btn-create-category">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="12" y1="5" x2="12" y2="19"></line>
-                <line x1="5" y1="12" x2="19" y2="12"></line>
-              </svg>
-              Create Category
-            </button>
+
           </form>
         </div>
+        
+
       </div>
       
       <div class="modal-footer">
@@ -895,9 +891,35 @@ function setupCategoriesModalListeners() {
     }
   });
   
-  // Save changes
+
+  
+  // Save changes - handles both new category creation and category updates
   saveBtn.addEventListener('click', async () => {
     try {
+      // First, check if there's a new category being added
+      const formData = new FormData(form);
+      const name = formData.get('name').trim();
+      const allocation = formData.get('allocation');
+      
+      // If user has filled in the form, validate and add the category
+      if (name || allocation) {
+        if (!name || !allocation) {
+          showNotification('Please fill in all fields to create a new category, or leave both empty to just save existing changes.', 'error');
+          return;
+        }
+        
+        // Check if category already exists
+        if (state.categories.some(cat => cat.name.toLowerCase() === name.toLowerCase())) {
+          showNotification('Category already exists.', 'error');
+          return;
+        }
+        
+        // Add new category
+        state.categories.push({ name, allocation });
+        showNotification('New category added successfully!', 'success');
+      }
+      
+      // Save all changes to Supabase
       await saveUserSettings();
       render();
       closeModal();
@@ -1277,8 +1299,8 @@ function renderTransactionsList(computed) {
                 ${computed.filteredTransactions.slice(0, 15).map(tx => {
                     const colors = CATEGORY_COLORS[tx.category] || CATEGORY_COLORS.default;
                     return `
-                    <div class="transaction-item" onclick="showTransactionModal(${JSON.stringify(tx).replace(/"/g, '&quot;')})">
-                        <div class="transaction-left">
+                    <div class="transaction-item" data-transaction-id="${tx.id}" data-transaction-data='${JSON.stringify(tx)}'>
+                        <div class="transaction-left" data-edit-transaction>
                             <div class="transaction-category" style="background-color: ${colors.bg}; color: ${colors.text}">
                                 ${tx.category}
                             </div>
@@ -1289,7 +1311,7 @@ function renderTransactionsList(computed) {
                         </div>
                         <div class="transaction-right">
                             <div class="transaction-amount negative">${formatCurrency(tx.amount)}</div>
-                            <button class="btn-icon delete-btn" data-delete-transaction="${tx.id}" onclick="event.stopPropagation();">
+                            <button class="btn-icon delete-btn" data-delete-transaction="${tx.id}">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <polyline points="3,6 5,6 21,6"></polyline>
                                     <path d="m19,6 v14 a2,2 0 0,1 -2,2 H7 a2,2 0 0,1 -2,-2 V6 m3,0 V4 a2,2 0 0,1 2,-2 h4 a2,2 0 0,1 2,2 v2"></path>
@@ -1494,10 +1516,19 @@ function setupEventListeners() {
         else if (target.closest('#edit-salary-btn')) handleSalaryEdit();
         else if (target.closest('#manage-categories-btn')) handleManageCategories();
         
-        // Delete transaction buttons
+        // Transaction interactions
         else if (target.closest('[data-delete-transaction]')) {
+            e.stopPropagation();
             const transactionId = target.closest('[data-delete-transaction]').getAttribute('data-delete-transaction');
             if (transactionId) handleDeleteTransaction(transactionId);
+        }
+        else if (target.closest('[data-edit-transaction]')) {
+            e.stopPropagation();
+            const transactionItem = target.closest('[data-transaction-data]');
+            if (transactionItem) {
+                const transactionData = JSON.parse(transactionItem.getAttribute('data-transaction-data'));
+                showTransactionModal(transactionData);
+            }
         }
     });
 

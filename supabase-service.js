@@ -220,6 +220,23 @@ class SupabaseService {
     }
   }
 
+  // Clear all transactions for the current user
+  async clearAllTransactions() {
+    try {
+      const { error } = await supabase
+        .from(TABLES.TRANSACTIONS)
+        .delete()
+        .eq('user_id', this.userId);
+
+      if (error) throw error;
+      
+      console.log('All transactions deleted successfully');
+    } catch (error) {
+      console.error('Error clearing all transactions:', error);
+      throw error;
+    }
+  }
+
   // Real-time listener for user data changes
   onUserDataChange(callback) {
     const channel = supabase
