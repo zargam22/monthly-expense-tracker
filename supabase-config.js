@@ -11,7 +11,8 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 // Database table names
 export const TABLES = {
   USERS: 'users',
-  TRANSACTIONS: 'transactions'
+  TRANSACTIONS: 'transactions',
+  MONTHLY_INCOME: 'monthly_income'
 }
 
 // Default user ID for single-user application

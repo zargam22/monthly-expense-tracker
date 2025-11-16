@@ -332,6 +332,60 @@ class SupabaseService {
       throw error;
     }
   }
+
+  // Get monthly income for a specific month/year
+  async getMonthlyIncome(year, month) {
+    try {
+      const { data, error } = await supabase
+        .from(TABLES.MONTHLY_INCOME)
+        .select('income')
+        .eq('user_id', this.userId)
+        .eq('year', year)
+        .eq('month', month)
+        .single();
+
+      if (error) {
+        // If no record exists (PGRST116 = not found), return 0
+        if (error.code === 'PGRST116') {
+          return 0;
+        }
+        throw error;
+      }
+
+      return data.income || 0;
+    } catch (error) {
+      console.error('Error getting monthly income:', error);
+      // Return 0 as default if any error occurs
+      return 0;
+    }
+  }
+
+  // Set monthly income for a specific month/year
+  async setMonthlyIncome(year, month, income) {
+    try {
+      // Use upsert to insert or update
+      const { data, error } = await supabase
+        .from(TABLES.MONTHLY_INCOME)
+        .upsert({
+          user_id: this.userId,
+          year: year,
+          month: month,
+          income: income,
+          updated_at: new Date().toISOString()
+        }, {
+          onConflict: 'user_id,year,month'
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      return data.income;
+    } catch (error) {
+      console.error('Error setting monthly income:', error);
+      throw error;
+    }
+  }
 }
 
 // Export singleton instance

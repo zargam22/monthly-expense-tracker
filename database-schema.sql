@@ -1,6 +1,8 @@
 -- Supabase Database Schema for Monthly Expense Tracker
 -- Copy and paste this entire file into Supabase SQL Editor
 
+-- NOTE: For monthly income feature, also run migration-monthly-income.sql
+
 -- Create users table
 CREATE TABLE public.users (
   id TEXT PRIMARY KEY,
@@ -40,3 +42,10 @@ CREATE POLICY "Allow all operations on users" ON public.users
 
 CREATE POLICY "Allow all operations on transactions" ON public.transactions 
   USING (true) WITH CHECK (true);
+
+-- ============================================
+-- MONTHLY INCOME TABLE (for per-month income)
+-- ============================================
+-- Note: Run migration-monthly-income.sql to create this table
+-- This table stores income separately for each month/year combination
+-- allowing different income values per month instead of one global salary

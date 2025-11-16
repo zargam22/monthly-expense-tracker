@@ -6,7 +6,7 @@ const CURRENCY = 'Rs';
 
 // --- STATE MANAGEMENT ---
 let state = {
-  salary: 60000,
+  income: 0,
   transactions: [],
   categories: [
     { name: 'Groceries', allocation: '67' },
@@ -39,7 +39,7 @@ function getDefaultState() {
   ];
 
   return {
-    salary: 60000,
+    income: 60000,
     transactions: sampleTransactions,
     categories: [
       { name: 'Groceries', allocation: '67' },
@@ -60,6 +60,11 @@ async function loadMonthTransactions(year, month) {
     const transactions = await supabaseService.getTransactionsByMonth(year, month + 1);
     state.transactions = transactions;
     console.log(`Loaded ${transactions.length} transactions for this month`);
+    
+    // Load monthly income for this specific month
+    const income = await supabaseService.getMonthlyIncome(year, month + 1);
+    state.income = income;
+    console.log(`Loaded income for ${year}-${month + 1}: ${income}`);
   } catch (error) {
     console.error('Error loading month transactions:', error);
     throw error;
@@ -78,13 +83,12 @@ async function initializeApp() {
     // Load user data from Supabase
     const userData = await supabaseService.getUserData();
     
-    // Update state with Supabase data
-    state.salary = userData.salary;
+    // Update state with Supabase data (excluding salary - we use monthly income now)
     state.categories = userData.categories;
     state.currentAllocationView = userData.currentAllocationView || 'all';
     state.currentDate = userData.currentDate;
     
-    // Load ONLY current month's transactions
+    // Load ONLY current month's transactions AND income
     const currentDate = new Date(state.currentDate);
     await loadMonthTransactions(currentDate.getFullYear(), currentDate.getMonth());
     
@@ -104,7 +108,6 @@ async function initializeApp() {
 async function saveUserSettings() {
   try {
     await supabaseService.updateUserSettings({
-      salary: state.salary,
       categories: state.categories,
       currentAllocationView: state.currentAllocationView,
       currentDate: state.currentDate
@@ -476,18 +479,30 @@ function updateCalendarDisplay() {
     }
 }
 
-async function handleSalaryEdit() {
-    const newSalaryStr = prompt('Enter your new monthly salary:', state.salary);
-    if (newSalaryStr === null) {
+async function handleIncomeEdit() {
+    const newIncomeStr = prompt('Enter your monthly income for this month:', state.income);
+    if (newIncomeStr === null) {
         return; // User cancelled
     }
-    const newSalary = parseFloat(newSalaryStr);
-    if (!isNaN(newSalary) && newSalary >= 0) {
-        state.salary = newSalary;
-        await saveUserSettings();
-        render();
+    const newIncome = parseFloat(newIncomeStr);
+    if (!isNaN(newIncome) && newIncome >= 0) {
+        try {
+            // Save income for the currently viewed month only
+            const currentDate = new Date(state.currentDate);
+            await supabaseService.setMonthlyIncome(
+                currentDate.getFullYear(),
+                currentDate.getMonth() + 1,
+                newIncome
+            );
+            state.income = newIncome;
+            render();
+            showNotification('Income updated successfully for this month!', 'success');
+        } catch (error) {
+            console.error('Error updating income:', error);
+            showNotification('Failed to update income. Please try again.', 'error');
+        }
     } else {
-        alert('Invalid salary amount. Please enter a valid number.');
+        alert('Invalid income amount. Please enter a valid number.');
     }
 }
 
@@ -1166,12 +1181,12 @@ function getComputedData() {
     });
 
     const totalSpent = filteredTransactions.reduce((sum, tx) => sum + tx.amount, 0);
-    const remaining = state.salary - totalSpent;
-    const spentPercentage = state.salary > 0 ? (totalSpent / state.salary) * 100 : 0;
+    const remaining = state.income - totalSpent;
+    const spentPercentage = state.income > 0 ? (totalSpent / state.income) * 100 : 0;
 
     // Allocation data - 1/3 and 2/3 allocation with 2 decimal precision
-    const allocation33Total = Math.round((state.salary * (1/3)) * 100) / 100;
-    const allocation67Total = Math.round((state.salary * (2/3)) * 100) / 100;
+    const allocation33Total = Math.round((state.income * (1/3)) * 100) / 100;
+    const allocation67Total = Math.round((state.income * (2/3)) * 100) / 100;
 
     const spent33 = state.transactions
         .filter(tx => {
@@ -1286,10 +1301,10 @@ function updateHeaderIfNeeded() {
 
 function updateDashboardIfNeeded() {
   const transactionsChanged = JSON.stringify(state.transactions) !== JSON.stringify(lastRenderState.transactions);
-  const salaryChanged = state.salary !== lastRenderState.salary;
+  const incomeChanged = state.income !== lastRenderState.income;
   const categoriesChanged = JSON.stringify(state.categories) !== JSON.stringify(lastRenderState.categories);
   
-  if (transactionsChanged || salaryChanged || categoriesChanged || 
+  if (transactionsChanged || incomeChanged || categoriesChanged || 
       state.currentDate !== lastRenderState.currentDate ||
       state.currentAllocationView !== lastRenderState.currentAllocationView) {
     const mainContent = document.querySelector('.main-content');
@@ -1303,7 +1318,7 @@ function updateLastRenderState() {
   lastRenderState = {
     currentDate: state.currentDate,
     currentAllocationView: state.currentAllocationView,
-    salary: state.salary,
+    income: state.income,
     transactions: JSON.parse(JSON.stringify(state.transactions)),
     categories: JSON.parse(JSON.stringify(state.categories))
   };
@@ -1315,7 +1330,7 @@ function renderHeader() {
     <div class="header-top">
       <div class="header-title">
         <h1>Monthly Expense Tracker</h1>
-        <p>Track and manage your monthly salary expenses (powered by Supabase)</p>
+        <p>Track and manage your monthly income expenses (powered by Supabase)</p>
       </div>
       <div class="header-actions">
         <button class="btn" id="manage-categories-btn">Manage Categories</button>
@@ -1408,15 +1423,15 @@ function renderSummaryCards(computed) {
     <div class="summary-cards">
         <div class="card">
             <div class="card-header">
-                <h3>Monthly Salary</h3>
-                <button class="btn-icon" id="edit-salary-btn">
+                <h3>Monthly Income</h3>
+                <button class="btn-icon" id="edit-income-btn">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
                         <path d="m18.5 2.5 a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
                     </svg>
                 </button>
             </div>
-            <div class="amount positive">${formatCurrency(state.salary)}</div>
+            <div class="amount positive">${formatCurrency(state.income)}</div>
         </div>
         
         <div class="card">
@@ -1736,7 +1751,7 @@ function setupEventListeners() {
         
         // Actions
         else if (target.closest('#add-transaction-btn')) handleAddTransaction();
-        else if (target.closest('#edit-salary-btn')) handleSalaryEdit();
+        else if (target.closest('#edit-income-btn')) handleIncomeEdit();
         else if (target.closest('#manage-categories-btn')) handleManageCategories();
         
         // Transaction interactions
