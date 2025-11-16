@@ -54,6 +54,18 @@ function getDefaultState() {
 }
 
 // --- SUPABASE INTEGRATION ---
+async function loadMonthTransactions(year, month) {
+  try {
+    console.log(`Loading transactions for ${year}-${month + 1}`);
+    const transactions = await supabaseService.getTransactionsByMonth(year, month + 1);
+    state.transactions = transactions;
+    console.log(`Loaded ${transactions.length} transactions for this month`);
+  } catch (error) {
+    console.error('Error loading month transactions:', error);
+    throw error;
+  }
+}
+
 async function initializeApp() {
   try {
     state.isLoading = true;
@@ -65,14 +77,17 @@ async function initializeApp() {
 
     // Load user data from Supabase
     const userData = await supabaseService.getUserData();
-    const transactions = await supabaseService.getTransactions();
-
+    
     // Update state with Supabase data
     state.salary = userData.salary;
     state.categories = userData.categories;
     state.currentAllocationView = userData.currentAllocationView || 'all';
     state.currentDate = userData.currentDate;
-    state.transactions = transactions;
+    
+    // Load ONLY current month's transactions
+    const currentDate = new Date(state.currentDate);
+    await loadMonthTransactions(currentDate.getFullYear(), currentDate.getMonth());
+    
     state.isLoading = false;
     state.error = null;
 
@@ -150,10 +165,6 @@ function openChartModal(chartType) {
         modalTitle.textContent = 'Category-wise Spending';
         modalDescription.textContent = 'Detailed view of expense distribution across categories';
         chartContainer.innerHTML = renderPieChart(computed.categorySpending, computed.totalSpent, false);
-    } else if (chartType === 'trends-chart') {
-        modalTitle.textContent = 'Monthly Trends';
-        modalDescription.textContent = 'Detailed comparison of spending patterns across months';
-        chartContainer.innerHTML = renderMonthlyTrendsChart(computed.monthlyTrends, false);
     }
     
     // Show modal with smooth animation
@@ -279,11 +290,20 @@ async function handleViewToggle(view) {
 }
 
 async function handleMonthChange(direction) {
-    const d = new Date(state.currentDate);
-    d.setMonth(d.getMonth() + (direction === 'prev' ? -1 : 1));
-    state.currentDate = d.toISOString();
-    await saveUserSettings();
-    render();
+    try {
+      const d = new Date(state.currentDate);
+      d.setMonth(d.getMonth() + (direction === 'prev' ? -1 : 1));
+      state.currentDate = d.toISOString();
+      
+      // Load transactions for the new month
+      await loadMonthTransactions(d.getFullYear(), d.getMonth());
+      
+      await saveUserSettings();
+      render();
+    } catch (error) {
+      console.error('Error changing month:', error);
+      showNotification('Failed to load transactions for this month', 'error');
+    }
 }
 
 // Performance optimization: Cache calendar modal
@@ -386,10 +406,19 @@ function setupCalendarEventListeners(modal) {
 }
 
 async function handleCalendarSelection(closeModal) {
-    state.currentDate = new Date(calendarDisplayDate.getFullYear(), calendarDisplayDate.getMonth(), 1).toISOString();
-    await saveUserSettings();
-    render();
-    closeModal();
+    try {
+      state.currentDate = new Date(calendarDisplayDate.getFullYear(), calendarDisplayDate.getMonth(), 1).toISOString();
+      
+      // Load transactions for the selected month
+      await loadMonthTransactions(calendarDisplayDate.getFullYear(), calendarDisplayDate.getMonth());
+      
+      await saveUserSettings();
+      render();
+      closeModal();
+    } catch (error) {
+      console.error('Error selecting calendar date:', error);
+      showNotification('Failed to load transactions for selected month', 'error');
+    }
 }
 
 function updateCalendarDisplay() {
@@ -778,19 +807,18 @@ function setupTransactionModalListeners(isEdit, editTransaction) {
       
       if (isEdit) {
         // Update existing transaction
-        const updatedTransaction = await supabaseService.updateTransaction(editTransaction.id, transactionData);
-        const index = state.transactions.findIndex(tx => tx.id === editTransaction.id);
-        if (index !== -1) {
-          state.transactions[index] = updatedTransaction;
-        }
+        await supabaseService.updateTransaction(editTransaction.id, transactionData);
         showNotification('💚 Transaction updated successfully!', 'success');
       } else {
         // Add new transaction
-        const savedTransaction = await supabaseService.addTransaction(transactionData);
-        console.log('Transaction saved successfully:', savedTransaction);
-        state.transactions.unshift(savedTransaction); // Add to beginning for better UX
+        await supabaseService.addTransaction(transactionData);
+        console.log('Transaction saved successfully');
         showNotification('💚 Transaction added successfully!', 'success');
       }
+      
+      // Reload current month transactions
+      const currentDate = new Date(state.currentDate);
+      await loadMonthTransactions(currentDate.getFullYear(), currentDate.getMonth());
       
       render();
       closeModal();
@@ -832,15 +860,15 @@ async function handleDeleteTransaction(transactionId) {
   if (!confirm('Are you sure you want to delete this transaction?')) return;
 
   try {
-    // Try to delete from database first (more robust approach)
+    // Delete from database
     await supabaseService.deleteTransaction(transactionId);
     console.log('Transaction successfully deleted from database');
 
-    // Reload transactions from database to ensure consistency
-    const allTransactions = await supabaseService.getTransactions();
-    state.transactions = allTransactions;
-    render();
+    // Reload ONLY current month transactions
+    const currentDate = new Date(state.currentDate);
+    await loadMonthTransactions(currentDate.getFullYear(), currentDate.getMonth());
     
+    render();
     showNotification('Transaction deleted successfully!', 'success');
 
   } catch (error) {
@@ -849,8 +877,8 @@ async function handleDeleteTransaction(transactionId) {
       // Transaction doesn't exist in database
       showNotification('Transaction was not found or already deleted.', 'error');
       // Reload to sync state
-      const allTransactions = await supabaseService.getTransactions();
-      state.transactions = allTransactions;
+      const currentDate = new Date(state.currentDate);
+      await loadMonthTransactions(currentDate.getFullYear(), currentDate.getMonth());
       render();
     } else {
       showNotification('Failed to delete transaction. Please try again.', 'error');
@@ -1179,26 +1207,6 @@ function getComputedData() {
         categorySpending[tx.category] = (categorySpending[tx.category] || 0) + tx.amount;
     });
 
-    // Monthly trends (last 6 months)
-    const monthlyTrends = [];
-    for (let i = 5; i >= 0; i--) {
-        const trendDate = new Date(year, month - i, 1);
-        const trendYear = trendDate.getFullYear();
-        const trendMonth = trendDate.getMonth();
-
-        const monthTransactions = state.transactions.filter(tx => {
-            const txDate = new Date(tx.date);
-            return txDate.getFullYear() === trendYear && txDate.getMonth() === trendMonth;
-        });
-
-        const monthSpent = monthTransactions.reduce((sum, tx) => sum + tx.amount, 0);
-        monthlyTrends.push({
-            month: trendDate.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
-            spent: monthSpent,
-            remaining: state.salary - monthSpent
-        });
-    }
-
     return {
         totalSpent,
         remaining,
@@ -1206,8 +1214,7 @@ function getComputedData() {
         filteredTransactions,
         allocation33,
         allocation67,
-        categorySpending,
-        monthlyTrends
+        categorySpending
     };
 }
 
@@ -1389,15 +1396,6 @@ function renderChartsToggle(computed) {
                         </div>
                     </div>
                     
-                    <div class="chart-section">
-                        <div class="chart-header">
-                            <h4>Monthly Trends</h4>
-                            <p>Comparison across months</p>
-                        </div>
-                        <div class="chart-container">
-                            ${renderMonthlyTrendsChart(computed.monthlyTrends, false)}
-                        </div>
-                    </div>
                 </div>
             </div>
         </div>
@@ -1690,42 +1688,6 @@ function renderChartLegend(sortedCategories, totalSpent) {
     return `<div class="chart-legend">${legendItems}</div>`;
 }
 
-function renderMonthlyTrendsChart(monthlyTrends, isPreview = false) {
-    const maxAmount = Math.max(...monthlyTrends.map(d => d.spent + d.remaining), state.salary * 0.5, 1);
-    const yAxisLabels = [0, 0.25, 0.5, 0.75, 1].map(p => Math.round(maxAmount * p)).reverse();
-    const chartHeight = isPreview ? 120 : 300;
-    
-    const bars = monthlyTrends.map(data => {
-        const spentHeight = maxAmount > 0 ? (data.spent / maxAmount) * 100 : 0;
-        const remainingHeight = maxAmount > 0 ? (data.remaining / maxAmount) * 100 : 0;
-        return `
-            <div class="chart-bar-group">
-                <div class="bars">
-                    <div class="bar remaining" style="height: ${remainingHeight}%" title="Remaining: ${formatCurrency(data.remaining)}"></div>
-                    <div class="bar spent" style="height: ${spentHeight}%" title="Spent: ${formatCurrency(data.spent)}"></div>
-                </div>
-                <div class="chart-label ${isPreview ? 'compact' : ''}">${data.month}</div>
-            </div>
-        `;
-    }).join('');
-
-    const containerClass = isPreview ? 'bar-chart-container preview' : 'bar-chart-container full';
-    
-    return `
-        <div class="${containerClass}">
-            ${!isPreview ? `<div class="y-axis">
-                ${yAxisLabels.map(label => `<span>${formatCurrency(label).replace(CURRENCY, '').trim()}</span>`).join('')}
-            </div>` : ''}
-            <div class="bar-chart" style="height: ${chartHeight}px">
-                ${bars}
-            </div>
-            <div class="chart-legend">
-                <div class="legend-item"><span class="legend-color" style="background-color: var(--green);"></span> Remaining</div>
-                <div class="legend-item"><span class="legend-color" style="background-color: var(--red);"></span> Spent</div>
-            </div>
-        </div>
-    `;
-}
 
 // --- PERFORMANCE OPTIMIZATIONS ---
 function debounce(func, wait) {
